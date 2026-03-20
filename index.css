@@ -1,0 +1,293 @@
+// src/pages/Agenda.jsx
+import { useState, useEffect } from 'react'
+import { useAuth } from '../hooks/useAuth'
+import { tarefasAPI, clientesAPI } from '../lib/supabase'
+import { Modal, Input, Select, Textarea, Btn, Campo, Badge, fmt, toast, Confirmar, EmptyState } from '../components/UI'
+
+const TIPOS     = ['tarefa', 'reuniao', 'ligacao', 'email', 'lembrete']
+const PRIORIDADES = ['baixa', 'normal', 'alta', 'urgente']
+const STATUS    = ['pendente', 'em_andamento', 'concluida', 'cancelada']
+const ICONES    = { tarefa: '☑', reuniao: '🤝', ligacao: '📞', email: '✉️', lembrete: '🔔' }
+
+export default function Agenda() {
+  const { user } = useAuth()
+  const [tarefas, setTarefas]       = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [filtro, setFiltro]         = useState('pendente')
+  const [modalNovo, setModalNovo]   = useState(false)
+  const [editItem, setEditItem]     = useState(null)
+  const [confirmar, setConfirmar]   = useState(null)
+
+  async function carregar() {
+    const { data } = await tarefasAPI.listar(user.id, {
+      status: filtro === 'todas' ? undefined : filtro
+    })
+    setTarefas(data || [])
+    setLoading(false)
+  }
+
+  useEffect(() => { setLoading(true); carregar() }, [filtro])
+
+  async function toggleConcluir(tarefa) {
+    const novoStatus = tarefa.status === 'concluida' ? 'pendente' : 'concluida'
+    setTarefas(prev => prev.map(t => t.id === tarefa.id ? { ...t, status: novoStatus } : t))
+    const { error } = await tarefasAPI.atualizar(tarefa.id, { status: novoStatus })
+    if (error) { toast.error('Erro'); carregar() }
+    else toast.success(novoStatus === 'concluida' ? 'Tarefa concluída! ✓' : 'Tarefa reaberta')
+  }
+
+  async function handleDeletar(id) {
+    const { error } = await tarefasAPI.deletar(id)
+    if (error) { toast.error('Erro'); return }
+    toast.success('Removida')
+    setConfirmar(null)
+    carregar()
+  }
+
+  // Agrupa por data
+  const grupos = tarefas.reduce((acc, t) => {
+    const data = t.data_inicio ? t.data_inicio.slice(0, 10) : 'sem_data'
+    if (!acc[data]) acc[data] = []
+    acc[data].push(t)
+    return acc
+  }, {})
+
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  function labelData(data) {
+    if (data === 'sem_data') return 'Sem data definida'
+    if (data === hoje) return '📅 Hoje'
+    const d = new Date(data + 'T00:00:00')
+    const amanha = new Date(); amanha.setDate(amanha.getDate() + 1)
+    if (d.toDateString() === amanha.toDateString()) return '📅 Amanhã'
+    return fmt.data(data)
+  }
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Agenda</h1>
+          <p className="text-slate-500 text-sm mt-0.5">{tarefas.length} itens</p>
+        </div>
+        <Btn onClick={() => setModalNovo(true)}>+ Nova Tarefa</Btn>
+      </div>
+
+      {/* Filtros */}
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {['pendente', 'em_andamento', 'concluida', 'todas'].map(s => (
+          <button
+            key={s}
+            onClick={() => setFiltro(s)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              filtro === s
+                ? 'bg-indigo-600 text-white'
+                : 'bg-white text-slate-600 border border-slate-200 hover:border-indigo-300'
+            }`}
+          >
+            {s === 'em_andamento' ? 'Em andamento' : s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Lista */}
+      {loading ? (
+        <div className="text-center py-10 text-slate-400">Carregando...</div>
+      ) : tarefas.length === 0 ? (
+        <EmptyState
+          icone="◷"
+          titulo="Sem tarefas"
+          descricao="Crie uma tarefa ou compromisso"
+          acao={<Btn onClick={() => setModalNovo(true)}>+ Nova Tarefa</Btn>}
+        />
+      ) : (
+        <div className="space-y-6">
+          {Object.entries(grupos)
+            .sort(([a], [b]) => {
+              if (a === 'sem_data') return 1
+              if (b === 'sem_data') return -1
+              return a.localeCompare(b)
+            })
+            .map(([data, items]) => (
+              <div key={data}>
+                <h3 className="text-sm font-semibold text-slate-500 mb-2 px-1">{labelData(data)}</h3>
+                <div className="space-y-2">
+                  {items.map(tarefa => (
+                    <TarefaCard
+                      key={tarefa.id}
+                      tarefa={tarefa}
+                      onToggle={() => toggleConcluir(tarefa)}
+                      onEditar={() => setEditItem(tarefa)}
+                      onDeletar={() => setConfirmar(tarefa.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      <ModalTarefa
+        open={modalNovo || !!editItem}
+        onClose={() => { setModalNovo(false); setEditItem(null) }}
+        userId={user.id}
+        tarefaInicial={editItem}
+        onSalvo={() => { setModalNovo(false); setEditItem(null); carregar() }}
+      />
+      <Confirmar
+        open={!!confirmar}
+        onClose={() => setConfirmar(null)}
+        onConfirm={() => handleDeletar(confirmar)}
+        mensagem="Deseja remover esta tarefa?"
+      />
+    </div>
+  )
+}
+
+// ============================================================
+// CARD DE TAREFA
+// ============================================================
+function TarefaCard({ tarefa, onToggle, onEditar, onDeletar }) {
+  const concluida = tarefa.status === 'concluida'
+  const atrasada  = tarefa.data_inicio && !concluida && new Date(tarefa.data_inicio) < new Date()
+
+  return (
+    <div className={`bg-white rounded-xl px-4 py-3 border flex items-start gap-3 shadow-sm transition-all ${
+      concluida ? 'border-slate-100 opacity-60' :
+      atrasada  ? 'border-red-200 bg-red-50/30' :
+                  'border-slate-100 hover:border-indigo-200'
+    }`}>
+      {/* Checkbox */}
+      <button
+        onClick={onToggle}
+        className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+          concluida ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 hover:border-indigo-400'
+        }`}
+      >
+        {concluida && <span className="text-xs">✓</span>}
+      </button>
+
+      {/* Conteúdo */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className={`text-sm font-medium ${concluida ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+            {ICONES[tarefa.tipo] || ''} {tarefa.titulo}
+          </p>
+          <Badge status={tarefa.prioridade} />
+          {atrasada && <span className="text-xs text-red-500 font-medium">Atrasado</span>}
+        </div>
+
+        {tarefa.descricao && (
+          <p className="text-xs text-slate-500 mt-0.5 truncate">{tarefa.descricao}</p>
+        )}
+
+        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+          {tarefa.data_inicio && (
+            <span className="text-xs text-slate-400">{fmt.dataHora(tarefa.data_inicio)}</span>
+          )}
+          {tarefa.clientes && (
+            <span className="text-xs text-slate-400">◎ {tarefa.clientes.nome}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Ações */}
+      <div className="flex gap-1 shrink-0">
+        <button onClick={onEditar} className="w-7 h-7 rounded flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 text-xs transition-colors">✎</button>
+        <button onClick={onDeletar} className="w-7 h-7 rounded flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 text-xs transition-colors">×</button>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// MODAL TAREFA
+// ============================================================
+function ModalTarefa({ open, onClose, userId, tarefaInicial, onSalvo }) {
+  const base = { titulo: '', descricao: '', tipo: 'tarefa', status: 'pendente', prioridade: 'normal', data_inicio: '', data_fim: '', cliente_id: '' }
+  const [form, setForm]       = useState(base)
+  const [clientes, setClientes] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setForm(tarefaInicial ? {
+        ...tarefaInicial,
+        data_inicio: tarefaInicial.data_inicio?.slice(0, 16) || '',
+        data_fim:    tarefaInicial.data_fim?.slice(0, 16) || '',
+        cliente_id:  tarefaInicial.cliente_id || '',
+      } : base)
+      clientesAPI.listar(userId).then(({ data }) => setClientes(data || []))
+    }
+  }, [open])
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  async function handleSalvar(e) {
+    e.preventDefault()
+    setLoading(true)
+    const payload = {
+      ...form,
+      cliente_id:  form.cliente_id || null,
+      data_inicio: form.data_inicio || null,
+      data_fim:    form.data_fim || null,
+    }
+    const fn = tarefaInicial
+      ? tarefasAPI.atualizar(tarefaInicial.id, payload)
+      : tarefasAPI.criar({ ...payload, user_id: userId })
+    const { error } = await fn
+    setLoading(false)
+    if (error) { toast.error('Erro ao salvar'); return }
+    toast.success(tarefaInicial ? 'Atualizado!' : 'Criado!')
+    onSalvo()
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={tarefaInicial ? 'Editar Tarefa' : 'Nova Tarefa'}>
+      <form onSubmit={handleSalvar} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Campo label="Título" required className="col-span-2">
+            <Input value={form.titulo} onChange={e => set('titulo', e.target.value)} placeholder="Ex: Ligar para cliente sobre proposta" required />
+          </Campo>
+          <Campo label="Tipo">
+            <Select value={form.tipo} onChange={e => set('tipo', e.target.value)}>
+              {TIPOS.map(t => <option key={t} value={t}>{ICONES[t]} {t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+            </Select>
+          </Campo>
+          <Campo label="Prioridade">
+            <Select value={form.prioridade} onChange={e => set('prioridade', e.target.value)}>
+              {PRIORIDADES.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
+            </Select>
+          </Campo>
+          <Campo label="Data / Hora início">
+            <Input type="datetime-local" value={form.data_inicio} onChange={e => set('data_inicio', e.target.value)} />
+          </Campo>
+          <Campo label="Data / Hora fim">
+            <Input type="datetime-local" value={form.data_fim} onChange={e => set('data_fim', e.target.value)} />
+          </Campo>
+          <Campo label="Cliente (opcional)" className="col-span-2">
+            <Select value={form.cliente_id} onChange={e => set('cliente_id', e.target.value)}>
+              <option value="">Sem cliente</option>
+              {clientes.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+          </Campo>
+          {tarefaInicial && (
+            <Campo label="Status" className="col-span-2">
+              <Select value={form.status} onChange={e => set('status', e.target.value)}>
+                {STATUS.map(s => <option key={s} value={s}>{s.replace('_', ' ').charAt(0).toUpperCase() + s.replace('_', ' ').slice(1)}</option>)}
+              </Select>
+            </Campo>
+          )}
+          <Campo label="Descrição" className="col-span-2">
+            <Textarea value={form.descricao} onChange={e => set('descricao', e.target.value)} placeholder="Detalhes..." />
+          </Campo>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Btn type="button" variant="secondary" onClick={onClose}>Cancelar</Btn>
+          <Btn type="submit" loading={loading}>Salvar</Btn>
+        </div>
+      </form>
+    </Modal>
+  )
+}
