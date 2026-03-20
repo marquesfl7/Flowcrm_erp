@@ -1,21 +1,11 @@
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: ['./index.html', './src/**/*.{js,jsx}'],
-  theme: {
-    extend: {
-      fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-      },
-      animation: {
-        'in': 'slideIn 0.2s ease-out',
-      },
-      keyframes: {
-        slideIn: {
-          from: { opacity: '0', transform: 'translateY(8px)' },
-          to:   { opacity: '1', transform: 'translateY(0)' },
-        }
-      }
-    },
+{
+  "name": "flowcrm_erp",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
   },
-  plugins: [],
+  "dependencies": {
+    "react": "^18.2.0"
+  }
 }
